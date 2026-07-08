@@ -241,8 +241,30 @@ textarea:focus {
   background: var(--ink);
 }
 
+.workspace-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 800;
+}
+
+.tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+
 .composer,
-.output-area {
+.output-area,
+.knowledge-area {
   padding: 22px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -253,6 +275,10 @@ textarea:focus {
 .composer {
   display: grid;
   gap: 16px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .field-header span {
@@ -269,6 +295,25 @@ textarea:focus {
   display: grid;
   min-width: 190px;
   gap: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.checkbox-row input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent);
+}
+
+.use-library {
+  min-width: 220px;
 }
 
 .primary-button,
@@ -335,6 +380,99 @@ textarea:focus {
   color: var(--danger);
 }
 
+.knowledge-area {
+  display: grid;
+  gap: 18px;
+}
+
+.library-tools,
+.library-form {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.library-form {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.library-form > div {
+  display: grid;
+  min-width: 180px;
+  gap: 8px;
+}
+
+.library-form .wide-field {
+  flex: 1 1 360px;
+}
+
+.library-list {
+  display: grid;
+  gap: 12px;
+}
+
+.library-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.library-item-title {
+  margin-bottom: 5px;
+  font-weight: 800;
+}
+
+.library-item a {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--accent-dark);
+  font-size: 0.92rem;
+}
+
+.library-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.library-meta span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.library-meta .good {
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.library-meta .bad {
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.empty-state {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #ffffff;
+  font-weight: 700;
+}
+
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -346,15 +484,23 @@ textarea:focus {
   }
 
   .topbar,
-  .control-row {
+  .control-row,
+  .library-tools,
+  .library-form {
     align-items: stretch;
     flex-direction: column;
   }
 
   .mode-toggle,
   .control-row > div,
-  .primary-button {
+  .primary-button,
+  .library-form > div,
+  .library-form .wide-field {
     width: 100%;
+  }
+
+  .library-item {
+    grid-template-columns: 1fr;
   }
 
   .workspace {

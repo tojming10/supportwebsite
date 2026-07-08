@@ -5,6 +5,7 @@ const MAX_CONTEXT_CHARS = 26000;
 const FETCH_TIMEOUT_MS = 4500;
 const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const { isDatabaseConfigured, searchReferences } = require("./db");
 
 module.exports = async function handler(request, response) {
   if (request.method !== "POST") {
@@ -18,7 +19,9 @@ module.exports = async function handler(request, response) {
       return response.status(400).json({ error: "Paste the customer question or email first." });
     }
 
-    const sources = await collectSources(payload.references);
+    const storedSources = payload.useKnowledgeBase ? await collectStoredSources(payload.message) : [];
+    const liveSources = await collectSources(payload.references);
+    const sources = mergeSources(storedSources, liveSources);
     const context = buildKnowledgeContext(payload.message, sources);
     const { draft, warning } = await createDraft(payload, context);
 
@@ -27,6 +30,7 @@ module.exports = async function handler(request, response) {
       warning,
       diagnostics: {
         openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
+        databaseConfigured: isDatabaseConfigured(),
         crawledPages: context.allSources.length,
         includedPages: context.includedSources.length,
       },
@@ -48,7 +52,42 @@ function normalizePayload(body) {
     agentName: String(body.agentName || "Support Team").trim(),
     companyName: String(body.companyName || "Your Company").trim(),
     mode: body.mode === "email" ? "email" : "chat",
+    useKnowledgeBase: body.useKnowledgeBase !== false,
   };
+}
+
+async function collectStoredSources(message) {
+  if (!isDatabaseConfigured()) return [];
+
+  try {
+    const references = await searchReferences(message, 16);
+    return references.map((reference) => ({
+      url: reference.url,
+      title: reference.title || reference.url,
+      text: reference.content || "",
+      status: reference.status || "fetched",
+      error: reference.error,
+      depth: 0,
+      stored: true,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function mergeSources(...groups) {
+  const map = new Map();
+  for (const group of groups) {
+    for (const source of group) {
+      if (!source.url) continue;
+      const key = source.url === "Manual reference note" ? `${source.url}:${map.size}` : normalizeUrl(source.url);
+      if (!map.has(key)) {
+        map.set(key, source);
+      }
+    }
+  }
+
+  return [...map.values()];
 }
 
 async function createDraft(payload, context) {
@@ -85,7 +124,9 @@ function friendlyOpenAIError(error) {
   return "Check the OpenAI environment variables in Vercel.";
 }
 
-async function collectSources(references) {
+async function collectSources(references, options = {}) {
+  const maxTotalSources = options.maxTotalSources || MAX_TOTAL_SOURCES;
+  const maxCrawlDepth = options.maxCrawlDepth ?? MAX_CRAWL_DEPTH;
   const seeds = references.length ? references : [];
   const sourceMap = new Map();
   const queue = [];
@@ -104,7 +145,7 @@ async function collectSources(references) {
     }
   }
 
-  while (queue.length && sourceMap.size <= MAX_TOTAL_SOURCES) {
+  while (queue.length && sourceMap.size <= maxTotalSources) {
     const batch = queue.splice(0, 6);
     const pages = await Promise.all(
       batch.map(async ({ url, depth }) => ({
@@ -120,10 +161,10 @@ async function collectSources(references) {
 
       Object.assign(current, page, { depth, pending: false });
 
-      if (page.status !== "fetched" || depth >= MAX_CRAWL_DEPTH) continue;
+      if (page.status !== "fetched" || depth >= maxCrawlDepth) continue;
 
       for (const link of discoverInternalLinks(url, page.html)) {
-        if (sourceMap.size >= MAX_TOTAL_SOURCES) break;
+        if (sourceMap.size >= maxTotalSources) break;
         addUrl(sourceMap, queue, link, depth + 1);
       }
     }
@@ -495,3 +536,6 @@ function detectNeeds(message) {
 
   return needs.length ? needs : ["the affected account, exact steps taken, and any screenshot or error text"];
 }
+
+module.exports.collectSources = collectSources;
+module.exports.normalizeUrl = normalizeUrl;

@@ -25,10 +25,10 @@
 
         <section class="panel">
           <div class="panel-heading">
-            <span>References</span>
+            <span>One-time references</span>
             <button class="icon-button" type="button" id="addReference" aria-label="Add reference">+</button>
           </div>
-          <p class="hint">Add help-center links, product docs, policy pages, or notes. The app will read those pages before drafting.</p>
+          <p class="hint">Optional links or notes for this draft only. Saved knowledge-base links are managed in the main workspace.</p>
           <div id="referenceList" class="reference-list"></div>
         </section>
 
@@ -45,7 +45,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Technical and customer service support</p>
-            <h2>Draft accurate replies from customer questions</h2>
+            <h2>Support knowledge base and response studio</h2>
           </div>
           <div class="mode-toggle" role="group" aria-label="Response format">
             <button class="mode active" type="button" data-mode="chat">Chat</button>
@@ -53,6 +53,54 @@
           </div>
         </header>
 
+        <nav class="workspace-tabs" aria-label="Workspace sections">
+          <button class="tab active" type="button" data-view="draftView">Draft</button>
+          <button class="tab" type="button" data-view="knowledgeView">Knowledge Base</button>
+        </nav>
+
+        <section class="knowledge-area hidden" id="knowledgeView" aria-label="Knowledge base manager">
+          <div class="library-tools">
+            <div>
+              <p class="eyebrow">Saved references</p>
+              <h3>Reference library</h3>
+            </div>
+            <button class="secondary-button" type="button" id="refreshLibrary">Refresh</button>
+          </div>
+
+          <div class="library-form">
+            <div class="wide-field">
+              <label for="libraryUrl">Reference URL</label>
+              <input id="libraryUrl" type="url" placeholder="https://help.example.com/article" />
+            </div>
+            <div>
+              <label for="sourceType">Type</label>
+              <select id="sourceType">
+                <option value="article">Article</option>
+                <option value="policy">Policy</option>
+                <option value="troubleshooting">Troubleshooting</option>
+                <option value="billing">Billing</option>
+                <option value="product">Product</option>
+              </select>
+            </div>
+            <div>
+              <label for="referenceTags">Tags</label>
+              <input id="referenceTags" type="text" placeholder="login, billing, setup" />
+            </div>
+            <label class="checkbox-row">
+              <input id="crawlLinkedPages" type="checkbox" checked />
+              <span>Open links found inside this page</span>
+            </label>
+            <button class="primary-button" type="button" id="saveReference">Save or update</button>
+          </div>
+
+          <div id="libraryStatus" class="source-status" aria-live="polite">
+            Database status will appear here.
+          </div>
+
+          <div id="libraryList" class="library-list"></div>
+        </section>
+
+        <div id="draftView">
         <section class="composer" aria-label="Support response composer">
           <div class="field-block">
             <div class="field-header">
@@ -66,6 +114,11 @@
           </div>
 
           <div class="control-row">
+            <label class="checkbox-row use-library">
+              <input id="useKnowledgeBase" type="checkbox" checked />
+              <span>Use saved knowledge base</span>
+            </label>
+
             <div>
               <label for="tone">Tone</label>
               <select id="tone">
@@ -104,6 +157,7 @@
             Add references, paste the customer message, then generate a draft. The response will be based on the content found in the linked pages and will flag anything that still needs confirmation.
           </div>
         </section>
+        </div>
       </main>
     </div>
 
