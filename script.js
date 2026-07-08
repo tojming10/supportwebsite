@@ -116,9 +116,9 @@ async function draftResponse() {
   };
 
   setLoading(true);
-  setStatus("Reading linked pages and finding relevant article content...");
+  setStatus("Opening the reference page and crawling linked pages on the same site...");
   outputTitle.textContent = "Working on your draft";
-  draftOutput.textContent = "Fetching the references, extracting page content, and matching it to the customer message.";
+  draftOutput.textContent = "Fetching the reference page, opening links found inside it, extracting readable content, and preparing a support-ready reply.";
 
   try {
     const response = await fetch("/api/draft", {
@@ -139,7 +139,10 @@ async function draftResponse() {
 
     const fetched = result.sources.filter((source) => source.status === "fetched").length;
     const total = result.sources.length;
-    setStatus(`Used ${fetched} of ${total} discovered source ${total === 1 ? "page" : "pages"} for this draft.`, "success");
+    setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"} for this draft.`, "success");
+    if (result.warning) {
+      setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"}. AI fallback was used.`, "success");
+    }
   } catch (error) {
     outputTitle.textContent = "Draft failed";
     draftOutput.classList.add("empty-warning");

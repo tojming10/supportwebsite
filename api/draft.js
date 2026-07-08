@@ -1,6 +1,7 @@
-const MAX_DISCOVERED_LINKS_PER_REFERENCE = 8;
-const MAX_TOTAL_SOURCES = 18;
-const MAX_TEXT_PER_SOURCE = 12000;
+const MAX_TOTAL_SOURCES = 45;
+const MAX_CRAWL_DEPTH = 2;
+const MAX_TEXT_PER_SOURCE = 9000;
+const MAX_CONTEXT_CHARS = 170000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 module.exports = async function handler(request, response) {
@@ -16,14 +17,13 @@ module.exports = async function handler(request, response) {
     }
 
     const sources = await collectSources(payload.references);
-    const relevantSections = findRelevantSections(payload.message, sources);
-    const draft = process.env.OPENAI_API_KEY
-      ? await draftWithOpenAI(payload, relevantSections)
-      : draftWithLocalRules(payload, relevantSections);
+    const context = buildKnowledgeContext(payload.message, sources);
+    const { draft, warning } = await createDraft(payload, context);
 
     return response.status(200).json({
       draft,
-      sources: sources.map(({ url, title, status, error }) => ({ url, title, status, error })),
+      warning,
+      sources: sources.map(({ url, title, status, error, depth }) => ({ url, title, status, error, depth })),
     });
   } catch (error) {
     return response.status(500).json({ error: error.message || "Something went wrong while drafting." });
@@ -44,47 +44,64 @@ function normalizePayload(body) {
   };
 }
 
+async function createDraft(payload, context) {
+  if (!process.env.OPENAI_API_KEY) {
+    return { draft: draftWithLocalRules(payload, context) };
+  }
+
+  try {
+    return { draft: await draftWithOpenAI(payload, context) };
+  } catch (error) {
+    return {
+      draft: draftWithLocalRules(payload, context),
+      warning: `AI drafting was unavailable, so a rule-based draft was created instead. ${error.message}`,
+    };
+  }
+}
+
 async function collectSources(references) {
   const seeds = references.length ? references : [];
   const sourceMap = new Map();
+  const queue = [];
 
   for (const reference of seeds) {
     if (isUrl(reference)) {
-      addUrl(sourceMap, reference);
+      addUrl(sourceMap, queue, reference, 0);
     } else {
       sourceMap.set(`note:${sourceMap.size}`, {
         url: "Manual reference note",
         title: "Manual reference note",
         text: reference,
         status: "fetched",
+        depth: 0,
       });
     }
   }
 
-  const seedUrls = [...sourceMap.values()].filter((source) => source.pending).map((source) => source.url);
-  for (const url of seedUrls) {
-    if (sourceMap.size >= MAX_TOTAL_SOURCES) break;
-    const page = await fetchPage(url);
-    Object.assign(sourceMap.get(normalizeUrl(url)), page, { pending: false });
+  while (queue.length && sourceMap.size <= MAX_TOTAL_SOURCES) {
+    const batch = queue.splice(0, 6);
+    const pages = await Promise.all(
+      batch.map(async ({ url, depth }) => ({
+        url,
+        depth,
+        page: await fetchPage(url),
+      })),
+    );
 
-    if (page.status !== "fetched") continue;
-    const links = discoverArticleLinks(url, page.html)
-      .filter((link) => !sourceMap.has(normalizeUrl(link)))
-      .slice(0, MAX_DISCOVERED_LINKS_PER_REFERENCE);
+    for (const { url, depth, page } of pages) {
+      const current = sourceMap.get(normalizeUrl(url));
+      if (!current) continue;
 
-    for (const link of links) {
-      if (sourceMap.size >= MAX_TOTAL_SOURCES) break;
-      addUrl(sourceMap, link);
+      Object.assign(current, page, { depth, pending: false });
+
+      if (page.status !== "fetched" || depth >= MAX_CRAWL_DEPTH) continue;
+
+      for (const link of discoverInternalLinks(url, page.html)) {
+        if (sourceMap.size >= MAX_TOTAL_SOURCES) break;
+        addUrl(sourceMap, queue, link, depth + 1);
+      }
     }
   }
-
-  const pendingSources = [...sourceMap.values()].filter((source) => source.pending);
-  await Promise.all(
-    pendingSources.map(async (source) => {
-      const page = await fetchPage(source.url);
-      Object.assign(source, page, { pending: false });
-    }),
-  );
 
   return [...sourceMap.values()].map((source) => {
     delete source.html;
@@ -93,10 +110,11 @@ async function collectSources(references) {
   });
 }
 
-function addUrl(sourceMap, url) {
+function addUrl(sourceMap, queue, url, depth) {
   const normalized = normalizeUrl(url);
-  if (!sourceMap.has(normalized)) {
-    sourceMap.set(normalized, { url: normalized, title: normalized, text: "", status: "pending", pending: true });
+  if (!sourceMap.has(normalized) && shouldCrawlUrl(normalized)) {
+    sourceMap.set(normalized, { url: normalized, title: normalized, text: "", status: "pending", pending: true, depth });
+    queue.push({ url: normalized, depth });
   }
 }
 
@@ -136,9 +154,8 @@ async function fetchPage(url) {
   }
 }
 
-function discoverArticleLinks(baseUrl, html) {
+function discoverInternalLinks(baseUrl, html) {
   const base = new URL(baseUrl);
-  const basePath = base.pathname.replace(/\/$/, "");
   const links = [...html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi)]
     .map((match) => {
       try {
@@ -152,19 +169,28 @@ function discoverArticleLinks(baseUrl, html) {
     .filter((url) => {
       const current = new URL(url);
       if (current.hostname !== base.hostname) return false;
-      if (/\.(jpg|jpeg|png|gif|svg|webp|pdf|zip|mp4|mov)$/i.test(current.pathname)) return false;
-      if (basePath && basePath !== "/" && !current.pathname.startsWith(basePath.split("/").slice(0, 2).join("/"))) return false;
-      return /article|help|support|docs|guide|faq|kb|knowledge|policy|troubleshoot/i.test(current.pathname);
+      return shouldCrawlUrl(url);
     });
 
   return [...new Set(links)];
 }
 
-function findRelevantSections(message, sources) {
+function shouldCrawlUrl(value) {
+  const url = new URL(value);
+  const path = url.pathname.toLowerCase();
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (/\.(jpg|jpeg|png|gif|svg|webp|pdf|zip|mp4|mov|avi|css|js|ico|woff|woff2|ttf)$/i.test(path)) return false;
+  if (/\/(login|logout|signup|sign-up|register|cart|checkout|account|admin|wp-admin|search)\b/i.test(path)) return false;
+  if (url.search && /(\?|&)(replytocom|share|utm_|fbclid|gclid|sort|filter)=/i.test(url.search)) return false;
+  return true;
+}
+
+function buildKnowledgeContext(message, sources) {
   const keywords = importantWords(message);
   const sections = [];
+  const fetchedSources = sources.filter((item) => item.status === "fetched" && item.text);
 
-  for (const source of sources.filter((item) => item.status === "fetched" && item.text)) {
+  for (const source of fetchedSources) {
     const paragraphs = source.text
       .split(/\n+/)
       .map((paragraph) => paragraph.trim())
@@ -183,40 +209,60 @@ function findRelevantSections(message, sources) {
     }
   }
 
-  const ranked = sections.sort((a, b) => b.score - a.score).slice(0, 8);
-  if (ranked.length) return ranked;
+  const rankedSections = sections.sort((a, b) => b.score - a.score).slice(0, 16);
+  const rankedUrls = new Set(rankedSections.map((section) => section.url));
+  const orderedSources = [
+    ...fetchedSources.filter((source) => rankedUrls.has(source.url)),
+    ...fetchedSources.filter((source) => !rankedUrls.has(source.url)),
+  ];
 
-  return sources
-    .filter((source) => source.status === "fetched" && source.text)
-    .slice(0, 5)
-    .map((source) => ({
-      score: 0,
-      title: source.title,
-      url: source.url,
-      text: source.text.slice(0, 900),
-    }));
+  let fullText = "";
+  const includedSources = [];
+
+  for (const source of orderedSources) {
+    const entry = `SOURCE: ${source.title}\nURL: ${source.url}\nCONTENT:\n${source.text.slice(0, MAX_TEXT_PER_SOURCE)}\n\n`;
+    if (fullText.length + entry.length > MAX_CONTEXT_CHARS) break;
+    fullText += entry;
+    includedSources.push(source);
+  }
+
+  return {
+    allSources: fetchedSources,
+    includedSources,
+    relevantSections: rankedSections,
+    fullText,
+  };
 }
 
-async function draftWithOpenAI(payload, sections) {
-  const context = sections
+async function draftWithOpenAI(payload, context) {
+  const highlights = context.relevantSections
     .map((section, index) => `[${index + 1}] ${section.title}\n${section.url}\n${section.text}`)
     .join("\n\n");
 
-  const prompt = `Create a ready-to-send ${payload.mode} support response.
+  const prompt = `You are an expert customer support representative for ${payload.companyName}.
+
+Create a ready-to-send ${payload.mode} response to the customer.
 
 Requirements:
-- Use only the reference content provided below.
-- If the references do not answer something, say what detail must be confirmed.
-- Keep the tone ${payload.tone}.
+- Read and use the linked-page knowledge base content below.
+- Treat the content as the source of truth. Do not invent policy, pricing, troubleshooting steps, or product behavior.
+- Be very friendly, calm, precise, and practical.
+- Give the customer a direct answer first when the references support one.
+- Include clear next steps in short bullets when useful.
+- If the content does not answer something, ask only for the missing detail needed to continue.
+- Do not mention that you crawled pages or used an AI system.
+- Do not include internal notes.
 - Priority: ${payload.priority}.
 - Sign as ${payload.agentName}, ${payload.companyName} Support.
-- Do not include internal notes.
 
 Customer message:
 ${payload.message}
 
-Reference content:
-${context || "No readable reference content was found."}`;
+Most relevant extracted passages:
+${highlights || "No exact keyword-matched passages were found."}
+
+Full crawled reference content:
+${context.fullText || "No readable reference content was found."}`;
 
   const result = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -240,10 +286,13 @@ ${context || "No readable reference content was found."}`;
   return data.output_text || "No draft was returned.";
 }
 
-function draftWithLocalRules(payload, sections) {
+function draftWithLocalRules(payload, context) {
   const needs = detectNeeds(payload.message);
-  const usefulFacts = sections.length
-    ? sections.map((section, index) => `${index + 1}. ${section.text}\nSource: ${section.title} - ${section.url}`).join("\n\n")
+  const usefulFacts = context.relevantSections.length
+    ? context.relevantSections
+        .slice(0, 10)
+        .map((section, index) => `${index + 1}. ${section.text}\nSource: ${section.title} - ${section.url}`)
+        .join("\n\n")
     : "No readable article content was found from the provided references.";
 
   if (payload.mode === "email") {
@@ -251,29 +300,29 @@ function draftWithLocalRules(payload, sections) {
 
 Hi there,
 
-Thank you for contacting ${payload.companyName} Support. I reviewed the available reference content and can help with this.
+Thank you for contacting ${payload.companyName} Support. I reviewed the available support information and I am happy to help.
 
 Based on your message, I understand the issue as:
 "${summarizeIssue(payload.message)}"
 
-Here is the most relevant information I found:
+Here is the most relevant information I found from our support content:
 ${usefulFacts}
 
-To make sure I give you the correct final answer, please send:
+To make sure I give you the most accurate next step, please send:
 - ${needs.join("\n- ")}
 
-Once I have those details, I can confirm the exact next step.
+Once I have those details, I can confirm the exact next step for you.
 
 Best,
 ${payload.agentName}
 ${payload.companyName} Support`;
   }
 
-  return `Hi, thanks for reaching out. I reviewed the available support content and can help with this.
+  return `Hi, thanks for reaching out. I reviewed the available support information and I am happy to help.
 
 From your message, it sounds like: "${summarizeIssue(payload.message)}"
 
-Here is the most relevant information I found:
+Here is the most relevant information I found from our support content:
 ${usefulFacts}
 
 Could you also send:
@@ -340,6 +389,8 @@ function cleanText(text) {
 
 function decodeHtml(text) {
   return String(text || "")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([a-f0-9]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
