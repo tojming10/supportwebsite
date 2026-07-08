@@ -6,7 +6,7 @@ const MAX_CONTEXT_CHARS = 60000;
 const FETCH_TIMEOUT_MS = 4500;
 const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-const { isDatabaseConfigured, searchReferences } = require("./db");
+const { isDatabaseConfigured, searchReferences, upsertReference } = require("./db");
 
 module.exports = async function handler(request, response) {
   if (request.method !== "POST") {
@@ -62,18 +62,63 @@ async function collectStoredSources(message) {
 
   try {
     const references = await searchReferences(message, 16);
-    return references.map((reference) => ({
-      url: reference.url,
-      title: reference.title || reference.url,
-      text: reference.content || "",
-      status: reference.status || "fetched",
-      error: reference.error,
-      depth: 0,
-      stored: true,
-    }));
+    const sources = [];
+
+    for (const reference of references) {
+      sources.push(await refreshThinReference(reference));
+    }
+
+    return sources;
   } catch {
     return [];
   }
+}
+
+async function refreshThinReference(reference) {
+  const source = {
+    url: reference.url,
+    title: reference.title || reference.url,
+    text: reference.content || "",
+    status: reference.status || "fetched",
+    error: reference.error,
+    depth: 0,
+    stored: true,
+  };
+
+  if ((source.text || "").length >= 700 || !isUrl(source.url)) {
+    return source;
+  }
+
+  try {
+    const refreshed = (await collectSources([source.url], { maxTotalSources: 1, maxCrawlDepth: 0 }))[0];
+    if (refreshed?.text && refreshed.text.length > source.text.length) {
+      await upsertReference({
+        url: refreshed.url,
+        normalized_url: normalizeUrl(refreshed.url),
+        title: refreshed.title || refreshed.url,
+        content: refreshed.text,
+        status: refreshed.status || "fetched",
+        error: refreshed.error || null,
+        tags: reference.tags || "",
+        source_type: reference.source_type || "article",
+        last_synced_at: new Date().toISOString(),
+      });
+
+      return {
+        url: refreshed.url,
+        title: refreshed.title || refreshed.url,
+        text: refreshed.text,
+        status: refreshed.status || "fetched",
+        error: refreshed.error,
+        depth: 0,
+        stored: true,
+      };
+    }
+  } catch {
+    return source;
+  }
+
+  return source;
 }
 
 function mergeSources(...groups) {
@@ -334,6 +379,8 @@ function splitParagraphs(text) {
 function isNoiseParagraph(text) {
   const value = text.trim();
   if (/^(-\s*)?(skip to|on this page|in this article|site navigation|product navigation)/i.test(value)) return true;
+  if (/^(←|→|previous:|next:)/i.test(value)) return true;
+  if (value === "#") return true;
   if (/,\s*\d+\s+of\s+\d+$/i.test(value)) return true;
   if (/^(-\s*)?(github|twitter|linkedin|youtube|terms|privacy|status|pricing)$/i.test(value)) return true;
   if (value.length < 90 && /^-\s+/.test(value) && !/[.!?:]$/.test(value)) return true;
@@ -559,7 +606,8 @@ function extractTitle(html) {
 }
 
 function extractReadableText(html) {
-  const main =
+  const articleContent = extractKnownArticleContent(html);
+  const main = articleContent ||
     html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] ||
     html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i)?.[1] ||
     html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ||
@@ -570,13 +618,30 @@ function extractReadableText(html) {
       .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
       .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
       .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<div\b[^>]*class=["'][^"']*(betterdocs-print-pdf|betterdocs-toc|betterdocs-entry-footer|betterdocs-social-share|betterdocs-article-reactions)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, " ")
+      .replace(/<div\b[^>]*class=["'][^"']*(post-navigation-link|wp-block-post-navigation-link)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, " ")
       .replace(/<nav\b[\s\S]*?<\/nav>/gi, " ")
+      .replace(/<aside\b[\s\S]*?<\/aside>/gi, " ")
       .replace(/<footer\b[\s\S]*?<\/footer>/gi, " ")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<li\b[^>]*>/gi, "\n- ")
       .replace(/<\/(p|li|h1|h2|h3|h4|tr|section|div)>/gi, "\n")
       .replace(/<[^>]+>/g, " "),
   );
+}
+
+function extractKnownArticleContent(html) {
+  const betterDocsBlock =
+    html.match(/<div\b[^>]*id=["']betterdocs-single-content["'][^>]*>([\s\S]*?)<div\b[^>]*class=["'][^"']*betterdocs-entry-footer/i)?.[1] ||
+    html.match(/<div\b[^>]*class=["'][^"']*betterdocs-entry-content[^"']*["'][^>]*>([\s\S]*?)<div\b[^>]*class=["'][^"']*betterdocs-entry-footer/i)?.[1];
+
+  if (betterDocsBlock) {
+    const title = html.match(/<h1\b[^>]*class=["'][^"']*betterdocs-entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1] || "";
+    return `${title}\n${betterDocsBlock}`;
+  }
+
+  return "";
 }
 
 function cleanText(text) {
