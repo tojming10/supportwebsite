@@ -8,6 +8,7 @@
   --accent-dark: #0b5f59;
   --accent-soft: #dff4f1;
   --warning: #9a5b13;
+  --danger: #a33a2a;
   --shadow: 0 18px 48px rgba(23, 32, 42, 0.1);
 }
 
@@ -289,6 +290,11 @@ textarea:focus {
   background: var(--accent-dark);
 }
 
+.primary-button:disabled {
+  cursor: wait;
+  background: #8aa8a4;
+}
+
 .secondary-button {
   min-width: 88px;
   border: 1px solid var(--line);
@@ -312,6 +318,21 @@ textarea:focus {
   border-color: rgba(154, 91, 19, 0.35);
   background: #fff8ed;
   color: var(--warning);
+}
+
+.source-status {
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.source-status.success {
+  color: var(--accent-dark);
+}
+
+.source-status.error {
+  color: var(--danger);
 }
 
 @media (max-width: 920px) {

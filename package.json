@@ -1,0 +1,9 @@
+{
+  "name": "supportdraft-ai",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "vercel dev",
+    "test": "node --check script.js && node --check api/draft.js"
+  }
+}

@@ -28,7 +28,7 @@
             <span>References</span>
             <button class="icon-button" type="button" id="addReference" aria-label="Add reference">+</button>
           </div>
-          <p class="hint">Add product docs, policy pages, issue links, or internal notes to ground the reply.</p>
+          <p class="hint">Add help-center links, product docs, policy pages, or notes. The app will read those pages before drafting.</p>
           <div id="referenceList" class="reference-list"></div>
         </section>
 
@@ -86,6 +86,9 @@
 
             <button class="primary-button" type="button" id="draftButton">Draft response</button>
           </div>
+          <div id="sourceStatus" class="source-status" aria-live="polite">
+            Waiting for references and a customer message.
+          </div>
         </section>
 
         <section class="output-area" aria-label="Drafted support response">
@@ -97,7 +100,7 @@
             <button class="secondary-button" type="button" id="copyButton">Copy</button>
           </div>
           <div id="draftOutput" class="draft-output">
-            Add references, paste the customer message, then generate a draft. The response will cite the references you provided and flag any details that need confirmation.
+            Add references, paste the customer message, then generate a draft. The response will be based on the content found in the linked pages and will flag anything that still needs confirmation.
           </div>
         </section>
       </main>

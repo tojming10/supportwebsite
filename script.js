@@ -6,6 +6,7 @@ const draftButton = document.querySelector("#draftButton");
 const copyButton = document.querySelector("#copyButton");
 const draftOutput = document.querySelector("#draftOutput");
 const outputTitle = document.querySelector("#outputTitle");
+const sourceStatus = document.querySelector("#sourceStatus");
 const modeButtons = document.querySelectorAll(".mode");
 const toneSelect = document.querySelector("#tone");
 const prioritySelect = document.querySelector("#priority");
@@ -15,8 +16,7 @@ const companyNameInput = document.querySelector("#companyName");
 let currentMode = "chat";
 
 const starterReferences = [
-  "https://docs.example.com/getting-started",
-  "Paste a help-center article, policy note, or internal runbook here",
+  "",
 ];
 
 function createReference(value = "") {
@@ -84,51 +84,17 @@ function buildReferenceText(references) {
   return references.map((reference, index) => `${index + 1}. ${reference}`).join("\n");
 }
 
-function buildChatDraft({ message, references, tone, priority, agentName, companyName }) {
-  const needs = detectNeeds(message);
-  return `Hi, thanks for reaching out. I can help with this.
-
-From what you shared, it sounds like: "${summarizeIssue(message)}"
-
-I will check this against our available support references:
-${buildReferenceText(references)}
-
-To make sure I give you the most accurate answer, could you also send the following?
-- ${needs.join("\n- ")}
-
-Once I have that, I can confirm the best next step. If this is blocking your work, I will treat it as ${priority.toLowerCase()} and keep the response focused.
-
-${agentName}
-${companyName} Support`;
+function setLoading(isLoading) {
+  draftButton.disabled = isLoading;
+  draftButton.textContent = isLoading ? "Reading links..." : "Draft response";
 }
 
-function buildEmailDraft({ message, references, tone, priority, agentName, companyName }) {
-  const needs = detectNeeds(message);
-  return `Subject: Re: Support request
-
-Hi there,
-
-Thank you for contacting ${companyName} Support. I am sorry for the trouble here, and I will help you get this sorted out.
-
-Based on your message, I understand the issue as:
-"${summarizeIssue(message)}"
-
-I will use the following references to keep the answer accurate:
-${buildReferenceText(references)}
-
-Before I give a final recommendation, could you please reply with:
-- ${needs.join("\n- ")}
-
-After you send those details, I can confirm the exact next step and share any technical instructions needed. I have marked this as ${priority.toLowerCase()} priority on our side.
-
-Best,
-${agentName}
-${companyName} Support
-
-Internal note: Desired tone is ${tone}. Verify the references before sending any definitive policy, billing, or troubleshooting claim.`;
+function setStatus(message, type = "") {
+  sourceStatus.textContent = message;
+  sourceStatus.className = `source-status ${type}`.trim();
 }
 
-function draftResponse() {
+async function draftResponse() {
   const message = messageInput.value.trim();
   draftOutput.classList.remove("empty-warning");
 
@@ -146,10 +112,42 @@ function draftResponse() {
     priority: prioritySelect.value,
     agentName: agentNameInput.value.trim() || "Support Team",
     companyName: companyNameInput.value.trim() || "Your Company",
+    mode: currentMode,
   };
 
-  outputTitle.textContent = currentMode === "chat" ? "Chat response draft" : "Email response draft";
-  draftOutput.textContent = currentMode === "chat" ? buildChatDraft(payload) : buildEmailDraft(payload);
+  setLoading(true);
+  setStatus("Reading linked pages and finding relevant article content...");
+  outputTitle.textContent = "Working on your draft";
+  draftOutput.textContent = "Fetching the references, extracting page content, and matching it to the customer message.";
+
+  try {
+    const response = await fetch("/api/draft", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Unable to create the draft.");
+    }
+
+    outputTitle.textContent = currentMode === "chat" ? "Chat response draft" : "Email response draft";
+    draftOutput.textContent = result.draft;
+
+    const fetched = result.sources.filter((source) => source.status === "fetched").length;
+    const total = result.sources.length;
+    setStatus(`Used ${fetched} of ${total} discovered source ${total === 1 ? "page" : "pages"} for this draft.`, "success");
+  } catch (error) {
+    outputTitle.textContent = "Draft failed";
+    draftOutput.classList.add("empty-warning");
+    draftOutput.textContent = error.message;
+    setStatus("Could not read the references. Check the links and try again.", "error");
+  } finally {
+    setLoading(false);
+  }
 }
 
 function updateCharCount() {
