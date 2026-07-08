@@ -1,7 +1,9 @@
-const MAX_TOTAL_SOURCES = 45;
-const MAX_CRAWL_DEPTH = 2;
-const MAX_TEXT_PER_SOURCE = 9000;
-const MAX_CONTEXT_CHARS = 170000;
+const MAX_TOTAL_SOURCES = 20;
+const MAX_CRAWL_DEPTH = 1;
+const MAX_TEXT_PER_SOURCE = 3500;
+const MAX_CONTEXT_CHARS = 26000;
+const FETCH_TIMEOUT_MS = 4500;
+const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 module.exports = async function handler(request, response) {
@@ -21,8 +23,13 @@ module.exports = async function handler(request, response) {
     const { draft, warning } = await createDraft(payload, context);
 
     return response.status(200).json({
-      draft,
+      draft: draft || draftWithLocalRules(payload, context),
       warning,
+      diagnostics: {
+        openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
+        crawledPages: context.allSources.length,
+        includedPages: context.includedSources.length,
+      },
       sources: sources.map(({ url, title, status, error, depth }) => ({ url, title, status, error, depth })),
     });
   } catch (error) {
@@ -50,13 +57,32 @@ async function createDraft(payload, context) {
   }
 
   try {
-    return { draft: await draftWithOpenAI(payload, context) };
+    const draft = await draftWithOpenAI(payload, context);
+    if (!draft || draft.trim().length < 20) {
+      throw new Error("OpenAI returned an empty draft.");
+    }
+
+    return { draft };
   } catch (error) {
     return {
       draft: draftWithLocalRules(payload, context),
-      warning: `AI drafting was unavailable, so a rule-based draft was created instead. ${error.message}`,
+      warning: `AI drafting was unavailable, so a rule-based draft was created instead. ${friendlyOpenAIError(error)}`,
     };
   }
+}
+
+function friendlyOpenAIError(error) {
+  const message = String(error.message || "");
+  if (/invalid_api_key|incorrect api key/i.test(message)) {
+    return "Check the OPENAI_API_KEY value in Vercel.";
+  }
+  if (/model|does not exist|access/i.test(message)) {
+    return "Check the OPENAI_MODEL value or model access for this API key.";
+  }
+  if (/abort|timed out|timeout/i.test(message)) {
+    return "The AI request timed out.";
+  }
+  return "Check the OpenAI environment variables in Vercel.";
 }
 
 async function collectSources(references) {
@@ -121,7 +147,7 @@ function addUrl(sourceMap, queue, url, depth) {
 async function fetchPage(url) {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     const result = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -209,7 +235,7 @@ function buildKnowledgeContext(message, sources) {
     }
   }
 
-  const rankedSections = sections.sort((a, b) => b.score - a.score).slice(0, 16);
+  const rankedSections = sections.sort((a, b) => b.score - a.score).slice(0, 14);
   const rankedUrls = new Set(rankedSections.map((section) => section.url));
   const orderedSources = [
     ...fetchedSources.filter((source) => rankedUrls.has(source.url)),
@@ -220,7 +246,12 @@ function buildKnowledgeContext(message, sources) {
   const includedSources = [];
 
   for (const source of orderedSources) {
-    const entry = `SOURCE: ${source.title}\nURL: ${source.url}\nCONTENT:\n${source.text.slice(0, MAX_TEXT_PER_SOURCE)}\n\n`;
+    const sourceHighlights = rankedSections
+      .filter((section) => section.url === source.url)
+      .map((section) => section.text)
+      .join("\n\n");
+    const sourceText = sourceHighlights || source.text;
+    const entry = `SOURCE: ${source.title}\nURL: ${source.url}\nCONTENT:\n${sourceText.slice(0, MAX_TEXT_PER_SOURCE)}\n\n`;
     if (fullText.length + entry.length > MAX_CONTEXT_CHARS) break;
     fullText += entry;
     includedSources.push(source);
@@ -264,8 +295,12 @@ ${highlights || "No exact keyword-matched passages were found."}
 Full crawled reference content:
 ${context.fullText || "No readable reference content was found."}`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
   const result = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
+    signal: controller.signal,
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -274,8 +309,10 @@ ${context.fullText || "No readable reference content was found."}`;
       model: OPENAI_MODEL,
       input: prompt,
       temperature: 0.2,
+      max_output_tokens: 900,
     }),
   });
+  clearTimeout(timeout);
 
   if (!result.ok) {
     const errorText = await result.text();
@@ -283,7 +320,27 @@ ${context.fullText || "No readable reference content was found."}`;
   }
 
   const data = await result.json();
-  return data.output_text || "No draft was returned.";
+  return extractOpenAIText(data);
+}
+
+function extractOpenAIText(data) {
+  if (typeof data.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
+  const textParts = [];
+  for (const item of data.output || []) {
+    for (const content of item.content || []) {
+      if (content.type === "output_text" && content.text) {
+        textParts.push(content.text);
+      }
+      if (content.type === "text" && content.text) {
+        textParts.push(content.text);
+      }
+    }
+  }
+
+  return textParts.join("\n").trim();
 }
 
 function draftWithLocalRules(payload, context) {

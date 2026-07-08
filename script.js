@@ -129,9 +129,20 @@ async function draftResponse() {
       body: JSON.stringify(payload),
     });
 
-    const result = await response.json();
+    const responseText = await response.text();
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch {
+      throw new Error("The drafting service did not return a valid response. It may have timed out while reading the linked pages.");
+    }
+
     if (!response.ok) {
       throw new Error(result.error || "Unable to create the draft.");
+    }
+
+    if (!result.draft) {
+      throw new Error("The drafting service finished, but no draft was returned.");
     }
 
     outputTitle.textContent = currentMode === "chat" ? "Chat response draft" : "Email response draft";
@@ -139,9 +150,10 @@ async function draftResponse() {
 
     const fetched = result.sources.filter((source) => source.status === "fetched").length;
     const total = result.sources.length;
-    setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"} for this draft.`, "success");
+    const included = result.diagnostics?.includedPages || fetched;
+    setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"} and used ${included} in the draft.`, "success");
     if (result.warning) {
-      setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"}. AI fallback was used.`, "success");
+      setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"}. AI fallback was used: ${result.warning}`, "success");
     }
   } catch (error) {
     outputTitle.textContent = "Draft failed";
