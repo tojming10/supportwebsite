@@ -1,7 +1,8 @@
 const MAX_TOTAL_SOURCES = 20;
 const MAX_CRAWL_DEPTH = 1;
-const MAX_TEXT_PER_SOURCE = 3500;
-const MAX_CONTEXT_CHARS = 26000;
+const MAX_STORED_TEXT_PER_SOURCE = 30000;
+const MAX_CONTEXT_TEXT_PER_SOURCE = 10000;
+const MAX_CONTEXT_CHARS = 60000;
 const FETCH_TIMEOUT_MS = 4500;
 const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
@@ -213,7 +214,7 @@ async function fetchPage(url) {
       error: text ? undefined : "No readable page text found.",
       html,
       title,
-      text: text.slice(0, MAX_TEXT_PER_SOURCE),
+      text: text.slice(0, MAX_STORED_TEXT_PER_SOURCE),
       url,
     };
   } catch (error) {
@@ -258,25 +259,25 @@ function buildKnowledgeContext(message, sources) {
   const fetchedSources = sources.filter((item) => item.status === "fetched" && item.text);
 
   for (const source of fetchedSources) {
-    const paragraphs = source.text
-      .split(/\n+/)
-      .map((paragraph) => paragraph.trim())
-      .filter((paragraph) => paragraph.length > 50);
+    const paragraphs = splitParagraphs(source.text);
+    const sourceScore = scoreSource(source, keywords);
 
-    for (const paragraph of paragraphs) {
+    for (let index = 0; index < paragraphs.length; index += 1) {
+      const paragraph = paragraphs[index];
       const score = scoreText(paragraph, keywords);
       if (score > 0) {
+        const windowText = buildInstructionWindow(paragraphs, index);
         sections.push({
-          score,
+          score: score + sourceScore + instructionScore(windowText),
           title: source.title,
           url: source.url,
-          text: paragraph.slice(0, 900),
+          text: windowText.slice(0, 3000),
         });
       }
     }
   }
 
-  const rankedSections = sections.sort((a, b) => b.score - a.score).slice(0, 14);
+  const rankedSections = dedupeSections(sections).sort((a, b) => b.score - a.score).slice(0, 12);
   const rankedUrls = new Set(rankedSections.map((section) => section.url));
   const orderedSources = [
     ...fetchedSources.filter((source) => rankedUrls.has(source.url)),
@@ -291,8 +292,10 @@ function buildKnowledgeContext(message, sources) {
       .filter((section) => section.url === source.url)
       .map((section) => section.text)
       .join("\n\n");
-    const sourceText = sourceHighlights || source.text;
-    const entry = `SOURCE: ${source.title}\nURL: ${source.url}\nCONTENT:\n${sourceText.slice(0, MAX_TEXT_PER_SOURCE)}\n\n`;
+    const sourceText = sourceHighlights
+      ? `Most relevant instruction passages:\n${sourceHighlights}\n\nBroader article content:\n${source.text}`
+      : source.text;
+    const entry = `SOURCE: ${source.title}\nURL: ${source.url}\nCONTENT:\n${sourceText.slice(0, MAX_CONTEXT_TEXT_PER_SOURCE)}\n\n`;
     if (fullText.length + entry.length > MAX_CONTEXT_CHARS) break;
     fullText += entry;
     includedSources.push(source);
@@ -304,6 +307,72 @@ function buildKnowledgeContext(message, sources) {
     relevantSections: rankedSections,
     fullText,
   };
+}
+
+function scoreSource(source, keywords) {
+  const titleAndUrl = `${source.title || ""} ${source.url || ""}`;
+  const titleScore = scoreText(titleAndUrl, keywords) * 3;
+  const seedBoost = source.depth === 0 ? 4 : 0;
+  const storedBoost = source.stored ? 2 : 0;
+  const depthPenalty = Math.max(0, Number(source.depth || 0)) * -2;
+  return titleScore + seedBoost + storedBoost + depthPenalty;
+}
+
+function splitParagraphs(text) {
+  return cleanText(text)
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 25)
+    .filter((paragraph) => !isNoiseParagraph(paragraph));
+}
+
+function isNoiseParagraph(text) {
+  const value = text.trim();
+  if (/^(-\s*)?(skip to|on this page|in this article|site navigation|product navigation)/i.test(value)) return true;
+  if (/,\s*\d+\s+of\s+\d+$/i.test(value)) return true;
+  if (/^(-\s*)?(github|twitter|linkedin|youtube|terms|privacy|status|pricing)$/i.test(value)) return true;
+  if (value.length < 90 && /^-\s+/.test(value) && !/[.!?:]$/.test(value)) return true;
+  return false;
+}
+
+function buildInstructionWindow(paragraphs, matchIndex) {
+  let start = Math.max(0, matchIndex - 2);
+  let end = Math.min(paragraphs.length - 1, matchIndex + 6);
+
+  while (start > 0 && isInstructionLine(paragraphs[start - 1]) && matchIndex - start < 6) {
+    start -= 1;
+  }
+
+  while (end < paragraphs.length - 1 && isInstructionLine(paragraphs[end + 1]) && end - matchIndex < 10) {
+    end += 1;
+  }
+
+  return paragraphs.slice(start, end + 1).join("\n");
+}
+
+function isInstructionLine(text) {
+  return /^(\d+[\.)]|[-*•]|step\s+\d+|note:|important:|warning:)/i.test(text.trim());
+}
+
+function instructionScore(text) {
+  const lines = text.split(/\n+/).filter(Boolean);
+  const instructionLines = lines.filter(isInstructionLine).length;
+  return Math.min(5, instructionLines);
+}
+
+function dedupeSections(sections) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const section of sections) {
+    const key = `${section.url}:${section.text.slice(0, 180).toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(section);
+    }
+  }
+
+  return unique;
 }
 
 async function draftWithOpenAI(payload, context) {
@@ -321,6 +390,8 @@ Requirements:
 - Be very friendly, calm, precise, and practical.
 - Give the customer a direct answer first when the references support one.
 - Include clear next steps in short bullets when useful.
+- When an article provides steps, include the complete ordered steps that apply. Do not summarize away required steps.
+- If steps are long, keep every required action but make the wording concise.
 - If the content does not answer something, ask only for the missing detail needed to continue.
 - Do not mention that you crawled pages or used an AI system.
 - Do not include internal notes.
@@ -403,7 +474,7 @@ Thank you for contacting ${payload.companyName} Support. I reviewed the availabl
 Based on your message, I understand the issue as:
 "${summarizeIssue(payload.message)}"
 
-Here is the most relevant information I found from our support content:
+Here are the relevant instructions from our support content:
 ${usefulFacts}
 
 To make sure I give you the most accurate next step, please send:
@@ -420,7 +491,7 @@ ${payload.companyName} Support`;
 
 From your message, it sounds like: "${summarizeIssue(payload.message)}"
 
-Here is the most relevant information I found from our support content:
+Here are the relevant instructions from our support content:
 ${usefulFacts}
 
 Could you also send:
@@ -471,6 +542,7 @@ function extractReadableText(html) {
       .replace(/<nav\b[\s\S]*?<\/nav>/gi, " ")
       .replace(/<footer\b[\s\S]*?<\/footer>/gi, " ")
       .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<li\b[^>]*>/gi, "\n- ")
       .replace(/<\/(p|li|h1|h2|h3|h4|tr|section|div)>/gi, "\n")
       .replace(/<[^>]+>/g, " "),
   );
