@@ -255,6 +255,7 @@ function shouldCrawlUrl(value) {
 
 function buildKnowledgeContext(message, sources) {
   const keywords = importantWords(message);
+  const wantsProcedure = isProcedureRequest(message);
   const sections = [];
   const fetchedSources = sources.filter((item) => item.status === "fetched" && item.text);
 
@@ -268,7 +269,7 @@ function buildKnowledgeContext(message, sources) {
       if (score > 0) {
         const windowText = buildInstructionWindow(paragraphs, index);
         sections.push({
-          score: score + sourceScore + instructionScore(windowText),
+          score: score + sourceScore + instructionScore(windowText) + actionScore(windowText, wantsProcedure),
           title: source.title,
           url: source.url,
           text: windowText.slice(0, 3000),
@@ -307,6 +308,10 @@ function buildKnowledgeContext(message, sources) {
     relevantSections: rankedSections,
     fullText,
   };
+}
+
+function isProcedureRequest(message) {
+  return /\b(how|steps?|step-by-step|guide|instructions?|setup|configure|create|add|update|reset|fix|troubleshoot)\b/i.test(message);
 }
 
 function scoreSource(source, keywords) {
@@ -360,6 +365,13 @@ function instructionScore(text) {
   return Math.min(5, instructionLines);
 }
 
+function actionScore(text, wantsProcedure) {
+  if (!wantsProcedure) return 0;
+  const actionMatches = text.match(/\b(click|select|choose|type|enter|open|navigate|go to|copy|paste|save|submit|create|add|enable|disable|turn on|turn off|verify|check)\b/gi) || [];
+  const numberedMatches = text.match(/(^|\n)\s*(\d+[\.)]|-\s+)/g) || [];
+  return Math.min(12, actionMatches.length + numberedMatches.length * 2);
+}
+
 function dedupeSections(sections) {
   const seen = new Set();
   const unique = [];
@@ -382,21 +394,31 @@ async function draftWithOpenAI(payload, context) {
 
   const prompt = `You are an expert customer support representative for ${payload.companyName}.
 
-Create a ready-to-send ${payload.mode} response to the customer.
+Create only the final ready-to-send ${payload.mode} response to the customer. The customer should be able to receive it exactly as written.
 
 Requirements:
 - Read and use the linked-page knowledge base content below.
 - Treat the content as the source of truth. Do not invent policy, pricing, troubleshooting steps, or product behavior.
 - Be very friendly, calm, precise, and practical.
-- Give the customer a direct answer first when the references support one.
-- Include clear next steps in short bullets when useful.
-- When an article provides steps, include the complete ordered steps that apply. Do not summarize away required steps.
-- If steps are long, keep every required action but make the wording concise.
+- Do not summarize the article. Answer the customer's exact question.
+- Ignore navigation menus, sidebars, related-article lists, footer links, and unrelated linked pages.
+- Give the direct answer first when the references support one.
+- Include only the steps that directly apply to the customer's question.
+- When an article provides a procedure, include every required step in the correct order.
+- If a procedure has optional branches, include only the branch that matches the customer's question, and mention alternatives briefly only when necessary.
+- Keep wording concise; remove article fluff while preserving required actions.
 - If the content does not answer something, ask only for the missing detail needed to continue.
 - Do not mention that you crawled pages or used an AI system.
+- Do not cite sources or paste source excerpts unless the customer asked for links.
 - Do not include internal notes.
 - Priority: ${payload.priority}.
 - Sign as ${payload.agentName}, ${payload.companyName} Support.
+
+Format rules:
+- If mode is email, include a short subject line, a greeting, a brief acknowledgement, the answer/steps, and a friendly closing.
+- If mode is chat, keep it conversational and compact.
+- Do not use markdown emphasis.
+- Do not include more than one introductory sentence before the answer.
 
 Customer message:
 ${payload.message}
@@ -459,9 +481,9 @@ function draftWithLocalRules(payload, context) {
   const needs = detectNeeds(payload.message);
   const usefulFacts = context.relevantSections.length
     ? context.relevantSections
-        .slice(0, 10)
-        .map((section, index) => `${index + 1}. ${section.text}\nSource: ${section.title} - ${section.url}`)
-        .join("\n\n")
+        .slice(0, 5)
+        .map((section, index) => `${index + 1}. ${cleanSupportStep(section.text)}`)
+        .join("\n")
     : "No readable article content was found from the provided references.";
 
   if (payload.mode === "email") {
@@ -469,15 +491,15 @@ function draftWithLocalRules(payload, context) {
 
 Hi there,
 
-Thank you for contacting ${payload.companyName} Support. I reviewed the available support information and I am happy to help.
+Thanks for contacting ${payload.companyName} Support. I can help with this.
 
-Based on your message, I understand the issue as:
+Based on your message, you need help with:
 "${summarizeIssue(payload.message)}"
 
-Here are the relevant instructions from our support content:
+Please follow these steps:
 ${usefulFacts}
 
-To make sure I give you the most accurate next step, please send:
+If the issue continues, please send:
 - ${needs.join("\n- ")}
 
 Once I have those details, I can confirm the exact next step for you.
@@ -487,11 +509,11 @@ ${payload.agentName}
 ${payload.companyName} Support`;
   }
 
-  return `Hi, thanks for reaching out. I reviewed the available support information and I am happy to help.
+  return `Hi, thanks for reaching out. I can help with this.
 
 From your message, it sounds like: "${summarizeIssue(payload.message)}"
 
-Here are the relevant instructions from our support content:
+Please try these steps:
 ${usefulFacts}
 
 Could you also send:
@@ -501,6 +523,15 @@ Once I have that, I can confirm the best next step.
 
 ${payload.agentName}
 ${payload.companyName} Support`;
+}
+
+function cleanSupportStep(text) {
+  return cleanText(text)
+    .split(/\n+/)
+    .filter((line) => !isNoiseParagraph(line))
+    .slice(0, 8)
+    .join("\n")
+    .slice(0, 1200);
 }
 
 function importantWords(text) {
