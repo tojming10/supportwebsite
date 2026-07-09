@@ -4,6 +4,6 @@
   "private": true,
   "scripts": {
     "start": "vercel dev",
-    "test": "node --check script.js && node --check api/db.js && node --check api/references.js && node --check api/draft.js"
+    "test": "node --check script.js && node --check api/db.js && node --check api/references.js && node --check api/draft.js && node --check api/translate.js"
   }
 }

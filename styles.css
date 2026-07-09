@@ -253,6 +253,31 @@ textarea:focus {
   gap: 16px;
 }
 
+.language-panel {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.language-panel strong,
+.language-panel p {
+  margin: 0;
+}
+
+.language-panel strong {
+  display: block;
+  color: var(--ink);
+}
+
+.language-panel p:not(.eyebrow) {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .hidden {
   display: none !important;
 }
@@ -321,6 +346,18 @@ textarea:focus {
   border: 1px solid var(--line);
   color: var(--ink);
   background: #ffffff;
+}
+
+.output-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.translate-toggle {
+  min-height: 44px;
+  white-space: nowrap;
 }
 
 .draft-output {
@@ -461,10 +498,15 @@ textarea:focus {
 
   .topbar,
   .control-row,
+  .output-actions,
   .library-tools,
   .library-form {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .language-panel {
+    grid-template-columns: 1fr;
   }
 
   .control-row > div,

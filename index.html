@@ -109,6 +109,17 @@
             ></textarea>
           </div>
 
+          <div class="language-panel" aria-label="Detected customer language">
+            <div>
+              <p class="eyebrow">Detected language</p>
+              <strong id="detectedLanguage">Waiting for message</strong>
+            </div>
+            <div>
+              <p class="eyebrow">English working version</p>
+              <p id="translatedMessage">The customer message will be translated to English for drafting.</p>
+            </div>
+          </div>
+
           <div class="control-row">
             <label class="checkbox-row use-library">
               <input id="useKnowledgeBase" type="checkbox" checked />
@@ -146,7 +157,13 @@
               <p class="eyebrow">Generated draft</p>
               <h3 id="outputTitle">Ready when you are</h3>
             </div>
-            <button class="secondary-button" type="button" id="copyButton">Copy</button>
+            <div class="output-actions">
+              <label class="checkbox-row translate-toggle hidden" id="translateToggleWrap">
+                <input id="translateDraftToggle" type="checkbox" />
+                <span>Translate to customer language</span>
+              </label>
+              <button class="secondary-button" type="button" id="copyButton">Copy</button>
+            </div>
           </div>
           <div id="draftOutput" class="draft-output">
             Add references, paste the customer message, then generate a draft. The response will be based on the content found in the linked pages and will flag anything that still needs confirmation.

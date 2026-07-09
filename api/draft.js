@@ -20,14 +20,25 @@ module.exports = async function handler(request, response) {
       return response.status(400).json({ error: "Paste the customer question or email first." });
     }
 
-    const storedSources = payload.useKnowledgeBase ? await collectStoredSources(payload.message) : [];
+    const language = await analyzeLanguage(payload.message);
+    const workingMessage = language.translatedMessage || payload.message;
+    const draftPayload = { ...payload, message: workingMessage, originalMessage: payload.message, language };
+
+    const storedSources = payload.useKnowledgeBase ? await collectStoredSources(workingMessage) : [];
     const liveSources = await collectSources(payload.references);
     const sources = mergeSources(storedSources, liveSources);
-    const context = buildKnowledgeContext(payload.message, sources);
-    const { draft, warning } = await createDraft(payload, context);
+    const context = buildKnowledgeContext(workingMessage, sources);
+    const { draft, warning } = await createDraft(draftPayload, context);
 
     return response.status(200).json({
       draft: draft || draftWithLocalRules(payload, context),
+      localizedDraft: "",
+      language: {
+        code: language.code,
+        name: language.name,
+        confidence: language.confidence,
+      },
+      translatedMessage: workingMessage,
       warning,
       diagnostics: {
         openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
@@ -154,6 +165,66 @@ async function createDraft(payload, context) {
       warning: `AI drafting was unavailable, so a rule-based draft was created instead. ${friendlyOpenAIError(error)}`,
     };
   }
+}
+
+async function analyzeLanguage(message) {
+  const fallback = detectLanguageFallback(message);
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  try {
+    const prompt = `Detect the language of the customer message and translate it to English.
+
+Return only valid JSON with this shape:
+{"code":"en","name":"English","confidence":0.99,"translatedMessage":"..."}
+
+Rules:
+- Use ISO 639-1 language code when possible.
+- If the message is already English, translatedMessage should be the original message cleaned only lightly.
+- Do not answer the customer.
+
+    Customer message:
+${message}`;
+
+    const text = await callOpenAI(prompt, 500, 0);
+    const parsed = JSON.parse(extractJsonObject(text));
+    return {
+      code: String(parsed.code || fallback.code).toLowerCase(),
+      name: String(parsed.name || fallback.name),
+      confidence: Number(parsed.confidence || fallback.confidence || 0.5),
+      translatedMessage: String(parsed.translatedMessage || message).trim(),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || "").trim();
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const candidate = fenced || raw;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  return start >= 0 && end > start ? candidate.slice(start, end + 1) : candidate;
+}
+
+function detectLanguageFallback(message) {
+  const text = String(message || "");
+  if (/[ぁ-ゟ゠-ヿ]/.test(text)) {
+    return { code: "ja", name: "Japanese", confidence: 0.7, translatedMessage: text };
+  }
+  if (/[\u4e00-\u9fff]/.test(text)) {
+    return { code: "zh", name: "Chinese", confidence: 0.7, translatedMessage: text };
+  }
+  if (/[가-힣]/.test(text)) {
+    return { code: "ko", name: "Korean", confidence: 0.7, translatedMessage: text };
+  }
+  if (/[а-яё]/i.test(text)) {
+    return { code: "ru", name: "Russian", confidence: 0.7, translatedMessage: text };
+  }
+  if (/[¿¡ñáéíóúü]/i.test(text)) {
+    return { code: "es", name: "Spanish", confidence: 0.55, translatedMessage: text };
+  }
+  return { code: "en", name: "English", confidence: 0.6, translatedMessage: text };
 }
 
 function friendlyOpenAIError(error) {
@@ -462,6 +533,8 @@ Requirements:
 - Do not include internal notes.
 - Priority: ${payload.priority}.
 - Sign as ${payload.agentName}, ${payload.companyName} Support.
+- The original customer message language is ${payload.language?.name || "English"}.
+- Draft in English first. A separate translation step will handle non-English replies.
 
 Format rules:
 - Include a short subject line, a greeting, a brief acknowledgement, the answer/steps, and a friendly closing.
@@ -472,12 +545,19 @@ Format rules:
 Customer message:
 ${payload.message}
 
+Original customer message:
+${payload.originalMessage || payload.message}
+
 Most relevant extracted passages:
 ${highlights || "No exact keyword-matched passages were found."}
 
 Full crawled reference content:
 ${context.fullText || "No readable reference content was found."}`;
 
+  return callOpenAI(prompt, 900, 0.2);
+}
+
+async function callOpenAI(prompt, maxOutputTokens, temperature) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
 
@@ -491,8 +571,8 @@ ${context.fullText || "No readable reference content was found."}`;
     body: JSON.stringify({
       model: OPENAI_MODEL,
       input: prompt,
-      temperature: 0.2,
-      max_output_tokens: 900,
+      temperature,
+      max_output_tokens: maxOutputTokens,
     }),
   });
   clearTimeout(timeout);
@@ -708,4 +788,5 @@ function detectNeeds(message) {
 }
 
 module.exports.collectSources = collectSources;
+module.exports.callOpenAI = callOpenAI;
 module.exports.normalizeUrl = normalizeUrl;

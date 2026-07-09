@@ -7,6 +7,10 @@ const copyButton = document.querySelector("#copyButton");
 const draftOutput = document.querySelector("#draftOutput");
 const outputTitle = document.querySelector("#outputTitle");
 const sourceStatus = document.querySelector("#sourceStatus");
+const detectedLanguage = document.querySelector("#detectedLanguage");
+const translatedMessage = document.querySelector("#translatedMessage");
+const translateToggleWrap = document.querySelector("#translateToggleWrap");
+const translateDraftToggle = document.querySelector("#translateDraftToggle");
 const toneSelect = document.querySelector("#tone");
 const prioritySelect = document.querySelector("#priority");
 const agentNameInput = document.querySelector("#agentName");
@@ -27,6 +31,12 @@ const libraryList = document.querySelector("#libraryList");
 const starterReferences = [
   "",
 ];
+
+let latestDrafts = {
+  english: "",
+  originalLanguage: "",
+  originalLanguageName: "English",
+};
 
 function createReference(value = "") {
   const row = document.createElement("div");
@@ -103,6 +113,36 @@ function setStatus(message, type = "") {
   sourceStatus.className = `source-status ${type}`.trim();
 }
 
+async function updateDraftDisplay() {
+  if (translateDraftToggle.checked && !latestDrafts.originalLanguage && latestDrafts.originalLanguageName !== "English") {
+    draftOutput.textContent = "Translating the email draft to the customer's original language...";
+
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          draft: latestDrafts.english,
+          languageName: latestDrafts.originalLanguageName,
+        }),
+      });
+      const result = await readJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to translate the draft.");
+      }
+      latestDrafts.originalLanguage = result.translatedDraft;
+    } catch (error) {
+      translateDraftToggle.checked = false;
+      setStatus(error.message, "error");
+    }
+  }
+
+  const useOriginalLanguage = translateDraftToggle.checked && latestDrafts.originalLanguage;
+  draftOutput.textContent = useOriginalLanguage ? latestDrafts.originalLanguage : latestDrafts.english;
+}
+
 async function draftResponse() {
   const message = messageInput.value.trim();
   draftOutput.classList.remove("empty-warning");
@@ -126,9 +166,11 @@ async function draftResponse() {
   };
 
   setLoading(true);
-  setStatus(useKnowledgeBaseInput.checked ? "Searching saved knowledge and reading one-time references..." : "Reading one-time references...");
+  setStatus(useKnowledgeBaseInput.checked ? "Detecting language, translating to English, and searching saved knowledge..." : "Detecting language, translating to English, and reading one-time references...");
   outputTitle.textContent = "Working on your draft";
-  draftOutput.textContent = "Fetching the reference page, opening links found inside it, extracting readable content, and preparing a support-ready reply.";
+  draftOutput.textContent = "Detecting the customer language, translating the message to English, checking references, and preparing a support-ready email.";
+  translateDraftToggle.checked = false;
+  translateToggleWrap.classList.add("hidden");
 
   try {
     const response = await fetch("/api/draft", {
@@ -156,7 +198,18 @@ async function draftResponse() {
     }
 
     outputTitle.textContent = "Email response draft";
-    draftOutput.textContent = result.draft;
+    latestDrafts = {
+      english: result.draft,
+      originalLanguage: result.localizedDraft || "",
+      originalLanguageName: result.language?.name || "English",
+    };
+    updateDraftDisplay();
+
+    detectedLanguage.textContent = result.language?.name || "Unknown";
+    translatedMessage.textContent = result.translatedMessage || message;
+
+    const canTranslateDraft = Boolean(result.language && result.language.code !== "en");
+    translateToggleWrap.classList.toggle("hidden", !canTranslateDraft);
 
     const fetched = result.sources.filter((source) => source.status === "fetched").length;
     const total = result.sources.length;
@@ -336,6 +389,7 @@ addReferenceButton.addEventListener("click", () => createReference());
 messageInput.addEventListener("input", updateCharCount);
 draftButton.addEventListener("click", draftResponse);
 copyButton.addEventListener("click", copyDraft);
+translateDraftToggle.addEventListener("change", updateDraftDisplay);
 saveReferenceButton.addEventListener("click", saveReference);
 refreshLibraryButton.addEventListener("click", loadLibrary);
 
