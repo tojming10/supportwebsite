@@ -23,7 +23,11 @@ module.exports = async function handler(request, response) {
 Rules:
 - Preserve the meaning exactly.
 - Keep the same email structure, subject line, numbered steps, and friendly tone.
-- Use simple, natural language that customers of all ages can understand.
+- Translate meaning, tone, and intent, not word by word.
+- Make it sound like a native ${languageName}-speaking customer support representative wrote it originally.
+- Use simple, natural language that customers of all ages and technical skill levels can understand.
+- Preserve product names, app names, error codes, order numbers, URLs, and quoted text exactly.
+- Localize phrasing politely and naturally, but do not change the actual instructions.
 - Do not add new information.
 - Return only the translated email.
 

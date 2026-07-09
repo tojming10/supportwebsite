@@ -172,13 +172,17 @@ async function analyzeLanguage(message) {
   if (!process.env.OPENAI_API_KEY) return fallback;
 
   try {
-    const prompt = `Detect the language of the customer message and translate it to English.
+    const prompt = `Detect the language of the customer message and translate it to natural English.
 
 Return only valid JSON with this shape:
 {"code":"en","name":"English","confidence":0.99,"translatedMessage":"..."}
 
 Rules:
 - Use ISO 639-1 language code when possible.
+- Translate meaning, tone, and intent, not word by word.
+- Make translatedMessage sound like a fluent English-speaking customer wrote it naturally.
+- Preserve product names, app names, error codes, order numbers, URLs, and quoted text exactly.
+- Keep the customer's emotion and urgency, but make unclear phrasing understandable.
 - If the message is already English, translatedMessage should be the original message cleaned only lightly.
 - Do not answer the customer.
 
