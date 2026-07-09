@@ -52,7 +52,7 @@ function normalizePayload(body) {
     priority: String(body.priority || "Normal"),
     agentName: String(body.agentName || "Support Team").trim(),
     companyName: String(body.companyName || "Your Company").trim(),
-    mode: body.mode === "email" ? "email" : "chat",
+    mode: "email",
     useKnowledgeBase: body.useKnowledgeBase !== false,
   };
 }
@@ -441,12 +441,14 @@ async function draftWithOpenAI(payload, context) {
 
   const prompt = `You are an expert customer support representative for ${payload.companyName}.
 
-Create only the final ready-to-send ${payload.mode} response to the customer. The customer should be able to receive it exactly as written.
+Create only the final ready-to-send email response to the customer. The customer should be able to receive it exactly as written.
 
 Requirements:
 - Read and use the linked-page knowledge base content below.
 - Treat the content as the source of truth. Do not invent policy, pricing, troubleshooting steps, or product behavior.
-- Be very friendly, calm, precise, and practical.
+- Be friendly, calm, accurate, and practical.
+- Use plain language that can be understood by customers of all ages and technical skill levels.
+- Avoid jargon. If a technical term is necessary, explain it briefly in simple words.
 - Do not summarize the article. Answer the customer's exact question.
 - Ignore navigation menus, sidebars, related-article lists, footer links, and unrelated linked pages.
 - Give the direct answer first when the references support one.
@@ -462,8 +464,8 @@ Requirements:
 - Sign as ${payload.agentName}, ${payload.companyName} Support.
 
 Format rules:
-- If mode is email, include a short subject line, a greeting, a brief acknowledgement, the answer/steps, and a friendly closing.
-- If mode is chat, keep it conversational and compact.
+- Include a short subject line, a greeting, a brief acknowledgement, the answer/steps, and a friendly closing.
+- Use short paragraphs and simple numbered steps.
 - Do not use markdown emphasis.
 - Do not include more than one introductory sentence before the answer.
 

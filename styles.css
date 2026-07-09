@@ -217,30 +217,6 @@ textarea:focus {
   gap: 24px;
 }
 
-.mode-toggle {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(86px, 1fr));
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(23, 32, 42, 0.05);
-}
-
-.mode {
-  min-height: 38px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--muted);
-  background: transparent;
-  font-weight: 800;
-}
-
-.mode.active {
-  color: #ffffff;
-  background: var(--ink);
-}
-
 .workspace-tabs {
   display: flex;
   gap: 8px;
@@ -491,7 +467,6 @@ textarea:focus {
     flex-direction: column;
   }
 
-  .mode-toggle,
   .control-row > div,
   .primary-button,
   .library-form > div,

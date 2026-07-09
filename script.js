@@ -7,7 +7,6 @@ const copyButton = document.querySelector("#copyButton");
 const draftOutput = document.querySelector("#draftOutput");
 const outputTitle = document.querySelector("#outputTitle");
 const sourceStatus = document.querySelector("#sourceStatus");
-const modeButtons = document.querySelectorAll(".mode");
 const toneSelect = document.querySelector("#tone");
 const prioritySelect = document.querySelector("#priority");
 const agentNameInput = document.querySelector("#agentName");
@@ -24,8 +23,6 @@ const saveReferenceButton = document.querySelector("#saveReference");
 const refreshLibraryButton = document.querySelector("#refreshLibrary");
 const libraryStatus = document.querySelector("#libraryStatus");
 const libraryList = document.querySelector("#libraryList");
-
-let currentMode = "chat";
 
 const starterReferences = [
   "",
@@ -124,7 +121,7 @@ async function draftResponse() {
     priority: prioritySelect.value,
     agentName: agentNameInput.value.trim() || "Support Team",
     companyName: companyNameInput.value.trim() || "Your Company",
-    mode: currentMode,
+    mode: "email",
     useKnowledgeBase: useKnowledgeBaseInput.checked,
   };
 
@@ -158,7 +155,7 @@ async function draftResponse() {
       throw new Error("The drafting service finished, but no draft was returned.");
     }
 
-    outputTitle.textContent = currentMode === "chat" ? "Chat response draft" : "Email response draft";
+    outputTitle.textContent = "Email response draft";
     draftOutput.textContent = result.draft;
 
     const fetched = result.sources.filter((source) => source.status === "fetched").length;
@@ -341,17 +338,6 @@ draftButton.addEventListener("click", draftResponse);
 copyButton.addEventListener("click", copyDraft);
 saveReferenceButton.addEventListener("click", saveReference);
 refreshLibraryButton.addEventListener("click", loadLibrary);
-
-modeButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    modeButtons.forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    currentMode = button.dataset.mode;
-    if (messageInput.value.trim()) {
-      draftResponse();
-    }
-  });
-});
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => {
