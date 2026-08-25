@@ -48,7 +48,7 @@ function detectNeeds(message) {
 
 function setLoading(isLoading) {
   draftButton.disabled = isLoading;
-  draftButton.textContent = isLoading ? "Reading links..." : "Draft response";
+  draftButton.textContent = isLoading ? "Preparing draft..." : "Draft response";
 }
 
 function setStatus(message, type = "") {

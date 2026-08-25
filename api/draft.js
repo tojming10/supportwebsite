@@ -1,14 +1,15 @@
 const MAX_TOTAL_SOURCES = 20;
 const MAX_CRAWL_DEPTH = 1;
 const MAX_STORED_TEXT_PER_SOURCE = 30000;
-const MAX_CONTEXT_TEXT_PER_SOURCE = 10000;
-const MAX_CONTEXT_CHARS = 60000;
+const MAX_CONTEXT_TEXT_PER_SOURCE = 15000;
+const MAX_CONTEXT_CHARS = 120000;
 const FETCH_TIMEOUT_MS = 4500;
 const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const GOOGLE_DRIVE_API_KEY = process.env.GOOGLE_DRIVE_API_KEY || process.env.GOOGLE_API_KEY;
-const MAX_DRIVE_PDFS = 15;
+const MAX_DRIVE_PDFS = Number(process.env.MAX_DRIVE_PDFS || 100);
 const { isDatabaseConfigured, searchReferences, upsertReference } = require("./db");
+const { DEFAULT_REFERENCE_LINKS } = require("./sourceLinks");
 
 module.exports = async function handler(request, response) {
   if (request.method !== "POST") {
@@ -56,11 +57,13 @@ module.exports = async function handler(request, response) {
 };
 
 function normalizePayload(body) {
+  const requestReferences = Array.isArray(body.references)
+    ? body.references.map((reference) => String(reference || "").trim()).filter(Boolean)
+    : [];
+
   return {
     message: String(body.message || "").trim(),
-    references: Array.isArray(body.references)
-      ? body.references.map((reference) => String(reference || "").trim()).filter(Boolean)
-      : [],
+    references: dedupeReferences([...DEFAULT_REFERENCE_LINKS, ...requestReferences]),
     tone: String(body.tone || "Warm, clear, and professional"),
     priority: String(body.priority || "Normal"),
     agentName: String(body.agentName || "Support Team").trim(),
@@ -68,6 +71,16 @@ function normalizePayload(body) {
     mode: "email",
     useKnowledgeBase: body.useKnowledgeBase !== false,
   };
+}
+
+function dedupeReferences(references) {
+  const seen = new Set();
+  return references.filter((reference) => {
+    const key = reference.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function collectStoredSources(message) {
@@ -366,15 +379,26 @@ function parseGoogleDriveReference(reference) {
 async function listDrivePdfFiles(folderId) {
   const query = encodeURIComponent(`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`);
   const fields = encodeURIComponent("files(id,name,mimeType,webViewLink),nextPageToken");
-  const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&pageSize=${MAX_DRIVE_PDFS}&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${encodeURIComponent(GOOGLE_DRIVE_API_KEY)}`;
-  const result = await fetch(url);
-  const data = await result.json();
+  const files = [];
+  let pageToken = "";
 
-  if (!result.ok) {
-    throw new Error(data?.error?.message || "Unable to list PDFs in this Google Drive folder.");
+  while (files.length < MAX_DRIVE_PDFS) {
+    const remaining = Math.max(1, Math.min(100, MAX_DRIVE_PDFS - files.length));
+    const pageTokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+    const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&pageSize=${remaining}&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${encodeURIComponent(GOOGLE_DRIVE_API_KEY)}${pageTokenParam}`;
+    const result = await fetch(url);
+    const data = await result.json();
+
+    if (!result.ok) {
+      throw new Error(data?.error?.message || "Unable to list PDFs in this Google Drive folder.");
+    }
+
+    files.push(...(data.files || []));
+    if (!data.nextPageToken) break;
+    pageToken = data.nextPageToken;
   }
 
-  return data.files || [];
+  return files;
 }
 
 async function fetchDrivePdf(fileId, fallbackTitle, webViewLink) {
