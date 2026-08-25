@@ -8,6 +8,7 @@ const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const { isDatabaseConfigured, searchReferences, upsertReference } = require("./db");
 const { DEFAULT_REFERENCE_LINKS } = require("./sourceLinks");
+const { buildTemplateContext } = require("./templateGuides");
 
 module.exports = async function handler(request, response) {
   if (request.method !== "POST") {
@@ -29,7 +30,8 @@ module.exports = async function handler(request, response) {
     const liveSources = await collectSources(payload.references);
     const sources = mergeSources(storedSources, liveSources);
     const context = buildKnowledgeContext(workingMessage, sources);
-    const { draft, warning } = await createDraft(draftPayload, context);
+    const templates = buildTemplateContext(workingMessage);
+    const { draft, warning } = await createDraft(draftPayload, context, templates);
 
     return response.status(200).json({
       draft: draft || draftWithLocalRules(payload, context),
@@ -46,6 +48,7 @@ module.exports = async function handler(request, response) {
         databaseConfigured: isDatabaseConfigured(),
         crawledPages: context.allSources.length,
         includedPages: context.includedSources.length,
+        matchedTemplates: templates.sections.length,
       },
       sources: sources.map(({ url, title, status, error, depth }) => ({ url, title, status, error, depth })),
     });
@@ -160,13 +163,13 @@ function mergeSources(...groups) {
   return [...map.values()];
 }
 
-async function createDraft(payload, context) {
+async function createDraft(payload, context, templates) {
   if (!process.env.OPENAI_API_KEY) {
-    return { draft: draftWithLocalRules(payload, context) };
+    return { draft: draftWithLocalRules(payload, context, templates) };
   }
 
   try {
-    const draft = await draftWithOpenAI(payload, context);
+    const draft = await draftWithOpenAI(payload, context, templates);
     if (!draft || draft.trim().length < 20) {
       throw new Error("OpenAI returned an empty draft.");
     }
@@ -174,7 +177,7 @@ async function createDraft(payload, context) {
     return { draft };
   } catch (error) {
     return {
-      draft: draftWithLocalRules(payload, context),
+      draft: draftWithLocalRules(payload, context, templates),
       warning: `AI drafting was unavailable, so a rule-based draft was created instead. ${friendlyOpenAIError(error)}`,
     };
   }
@@ -522,7 +525,7 @@ function dedupeSections(sections) {
   return unique;
 }
 
-async function draftWithOpenAI(payload, context) {
+async function draftWithOpenAI(payload, context, templates) {
   const highlights = context.relevantSections
     .map((section, index) => `[${index + 1}] ${section.title}\n${section.url}\n${section.text}`)
     .join("\n\n");
@@ -534,6 +537,9 @@ Create only the final ready-to-send email response to the customer. The customer
 Requirements:
 - Read and use the linked-page knowledge base content below.
 - Treat the content as the source of truth. Do not invent policy, pricing, troubleshooting steps, or product behavior.
+- Use the matching internal template examples only when they fit the customer's topic.
+- Rephrase template wording so the response sounds natural and personally written, not copied or AI-generated.
+- If the template conflicts with the knowledge base or the customer's specific situation, follow the knowledge base and customer message.
 - Be friendly, calm, accurate, and practical.
 - Use plain language that can be understood by customers of all ages and technical skill levels.
 - Avoid jargon. If a technical term is necessary, explain it briefly in simple words.
@@ -569,7 +575,10 @@ Most relevant extracted passages:
 ${highlights || "No exact keyword-matched passages were found."}
 
 Full crawled reference content:
-${context.fullText || "No readable reference content was found."}`;
+${context.fullText || "No readable reference content was found."}
+
+Matching internal template examples:
+${templates.fullText || "No matching internal template examples were found."}`;
 
   return callOpenAI(prompt, 900, 0.2);
 }
@@ -623,7 +632,7 @@ function extractOpenAIText(data) {
   return textParts.join("\n").trim();
 }
 
-function draftWithLocalRules(payload, context) {
+function draftWithLocalRules(payload, context, templates) {
   const needs = detectNeeds(payload.message);
   const usefulFacts = context.relevantSections.length
     ? context.relevantSections
@@ -631,6 +640,9 @@ function draftWithLocalRules(payload, context) {
         .map((section, index) => `${index + 1}. ${cleanSupportStep(section.text)}`)
         .join("\n")
     : "No readable article content was found from the provided references.";
+  const templateHint = templates?.sections?.length
+    ? `\n\nRelevant template topic: ${templates.sections[0].topic}`
+    : "";
 
   if (payload.mode === "email") {
     return `Subject: Re: Support request
@@ -643,7 +655,7 @@ Based on your message, you need help with:
 "${summarizeIssue(payload.message)}"
 
 Please follow these steps:
-${usefulFacts}
+${usefulFacts}${templateHint}
 
 If the issue continues, please send:
 - ${needs.join("\n- ")}

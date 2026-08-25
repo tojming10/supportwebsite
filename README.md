@@ -31,3 +31,13 @@ api/sourceLinks.js
 ```
 
 When a draft is created, the API automatically reads those configured sources and uses them as the support knowledge base.
+
+## Template Guides
+
+DERYAN response examples are stored in:
+
+```text
+api/templates/deryan.txt
+```
+
+The app matches the customer's message to relevant template topics and uses those examples as writing guidance only. Knowledge base links remain the source of truth for policies, steps, and product details.
