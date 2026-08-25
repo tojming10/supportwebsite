@@ -6,6 +6,8 @@ const MAX_CONTEXT_CHARS = 60000;
 const FETCH_TIMEOUT_MS = 4500;
 const OPENAI_TIMEOUT_MS = 14000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const GOOGLE_DRIVE_API_KEY = process.env.GOOGLE_DRIVE_API_KEY || process.env.GOOGLE_API_KEY;
+const MAX_DRIVE_PDFS = 15;
 const { isDatabaseConfigured, searchReferences, upsertReference } = require("./db");
 
 module.exports = async function handler(request, response) {
@@ -254,7 +256,14 @@ async function collectSources(references, options = {}) {
 
   for (const reference of seeds) {
     if (isUrl(reference)) {
-      addUrl(sourceMap, queue, reference, 0);
+      const driveSources = await collectGoogleDriveSources(reference);
+      if (driveSources.length) {
+        for (const source of driveSources) {
+          sourceMap.set(source.url || `drive:${sourceMap.size}`, source);
+        }
+      } else {
+        addUrl(sourceMap, queue, reference, 0);
+      }
     } else {
       sourceMap.set(`note:${sourceMap.size}`, {
         url: "Manual reference note",
@@ -296,6 +305,137 @@ async function collectSources(references, options = {}) {
     delete source.pending;
     return source;
   });
+}
+
+async function collectGoogleDriveSources(reference) {
+  const driveRef = parseGoogleDriveReference(reference);
+  if (!driveRef) return [];
+
+  if (driveRef.type === "folder") {
+    if (!GOOGLE_DRIVE_API_KEY) {
+      return [{
+        url: reference,
+        title: "Google Drive folder",
+        text: "",
+        status: "failed",
+        error: "Missing GOOGLE_DRIVE_API_KEY. Add it in Vercel to read PDFs inside Drive folders.",
+        depth: 0,
+      }];
+    }
+
+    const files = await listDrivePdfFiles(driveRef.id);
+    if (!files.length) {
+      return [{
+        url: reference,
+        title: "Google Drive folder",
+        text: "",
+        status: "failed",
+        error: "No readable PDF files were found in this Drive folder.",
+        depth: 0,
+      }];
+    }
+
+    return Promise.all(files.slice(0, MAX_DRIVE_PDFS).map((file) => fetchDrivePdf(file.id, file.name, file.webViewLink)));
+  }
+
+  return [await fetchDrivePdf(driveRef.id, "Google Drive PDF", reference)];
+}
+
+function parseGoogleDriveReference(reference) {
+  let url;
+  try {
+    url = new URL(reference);
+  } catch {
+    return null;
+  }
+
+  if (!/(^|\.)drive\.google\.com$/i.test(url.hostname)) return null;
+
+  const folderMatch = url.pathname.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return { type: "folder", id: folderMatch[1] };
+
+  const fileMatch = url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (fileMatch) return { type: "file", id: fileMatch[1] };
+
+  const id = url.searchParams.get("id");
+  if (id) return { type: "file", id };
+
+  return null;
+}
+
+async function listDrivePdfFiles(folderId) {
+  const query = encodeURIComponent(`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`);
+  const fields = encodeURIComponent("files(id,name,mimeType,webViewLink),nextPageToken");
+  const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&pageSize=${MAX_DRIVE_PDFS}&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${encodeURIComponent(GOOGLE_DRIVE_API_KEY)}`;
+  const result = await fetch(url);
+  const data = await result.json();
+
+  if (!result.ok) {
+    throw new Error(data?.error?.message || "Unable to list PDFs in this Google Drive folder.");
+  }
+
+  return data.files || [];
+}
+
+async function fetchDrivePdf(fileId, fallbackTitle, webViewLink) {
+  const title = fallbackTitle || "Google Drive PDF";
+
+  try {
+    const metadata = GOOGLE_DRIVE_API_KEY ? await fetchDriveFileMetadata(fileId) : null;
+    const pdfBuffer = await downloadDrivePdf(fileId);
+    const text = await extractPdfText(pdfBuffer);
+
+    return {
+      url: webViewLink || `https://drive.google.com/file/d/${fileId}/view`,
+      title: metadata?.name || title,
+      text: text.slice(0, MAX_STORED_TEXT_PER_SOURCE),
+      status: text ? "fetched" : "failed",
+      error: text ? undefined : "No readable text was found in this PDF.",
+      depth: 0,
+    };
+  } catch (error) {
+    return {
+      url: webViewLink || `https://drive.google.com/file/d/${fileId}/view`,
+      title,
+      text: "",
+      status: "failed",
+      error: error.message || "Unable to read this Google Drive PDF.",
+      depth: 0,
+    };
+  }
+}
+
+async function fetchDriveFileMetadata(fileId) {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink&supportsAllDrives=true&key=${encodeURIComponent(GOOGLE_DRIVE_API_KEY)}`;
+  const result = await fetch(url);
+  if (!result.ok) return null;
+  return result.json();
+}
+
+async function downloadDrivePdf(fileId) {
+  const urls = [];
+  if (GOOGLE_DRIVE_API_KEY) {
+    urls.push(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true&key=${encodeURIComponent(GOOGLE_DRIVE_API_KEY)}`);
+  }
+  urls.push(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`);
+
+  for (const url of urls) {
+    const result = await fetch(url, {
+      headers: { accept: "application/pdf,*/*;q=0.8" },
+    });
+    const contentType = result.headers.get("content-type") || "";
+    if (result.ok && /pdf|octet-stream/i.test(contentType)) {
+      return Buffer.from(await result.arrayBuffer());
+    }
+  }
+
+  throw new Error("The PDF could not be downloaded. Make sure the Drive file is shared or accessible with the configured Google API key.");
+}
+
+async function extractPdfText(buffer) {
+  const pdfParse = require("pdf-parse");
+  const parsed = await pdfParse(buffer);
+  return cleanText(parsed.text || "");
 }
 
 function addUrl(sourceMap, queue, url, depth) {

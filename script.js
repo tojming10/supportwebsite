@@ -15,18 +15,6 @@ const toneSelect = document.querySelector("#tone");
 const prioritySelect = document.querySelector("#priority");
 const agentNameInput = document.querySelector("#agentName");
 const companyNameInput = document.querySelector("#companyName");
-const tabs = document.querySelectorAll(".tab");
-const draftView = document.querySelector("#draftView");
-const knowledgeView = document.querySelector("#knowledgeView");
-const useKnowledgeBaseInput = document.querySelector("#useKnowledgeBase");
-const libraryUrlInput = document.querySelector("#libraryUrl");
-const sourceTypeInput = document.querySelector("#sourceType");
-const referenceTagsInput = document.querySelector("#referenceTags");
-const crawlLinkedPagesInput = document.querySelector("#crawlLinkedPages");
-const saveReferenceButton = document.querySelector("#saveReference");
-const refreshLibraryButton = document.querySelector("#refreshLibrary");
-const libraryStatus = document.querySelector("#libraryStatus");
-const libraryList = document.querySelector("#libraryList");
 
 const starterReferences = [
   "",
@@ -44,7 +32,7 @@ function createReference(value = "") {
 
   const input = document.createElement("input");
   input.type = "text";
-  input.placeholder = "Link or reference note";
+  input.placeholder = "Website, Google Drive PDF, or Drive folder link";
   input.value = value;
 
   const remove = document.createElement("button");
@@ -162,13 +150,13 @@ async function draftResponse() {
     agentName: agentNameInput.value.trim() || "Support Team",
     companyName: companyNameInput.value.trim() || "Your Company",
     mode: "email",
-    useKnowledgeBase: useKnowledgeBaseInput.checked,
+    useKnowledgeBase: false,
   };
 
   setLoading(true);
-  setStatus(useKnowledgeBaseInput.checked ? "Detecting language, translating to English, and searching saved knowledge..." : "Detecting language, translating to English, and reading one-time references...");
+  setStatus("Detecting language, translating to English, and reading pasted links or Google Drive PDFs...");
   outputTitle.textContent = "Working on your draft";
-  draftOutput.textContent = "Detecting the customer language, translating the message to English, checking references, and preparing a support-ready email.";
+  draftOutput.textContent = "Detecting the customer language, translating the message to English, reading linked pages and PDFs, and preparing a support-ready email.";
   translateDraftToggle.checked = false;
   translateToggleWrap.classList.add("hidden");
 
@@ -214,9 +202,9 @@ async function draftResponse() {
     const fetched = result.sources.filter((source) => source.status === "fetched").length;
     const total = result.sources.length;
     const included = result.diagnostics?.includedPages || fetched;
-    setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"} and used ${included} in the draft.`, "success");
+    setStatus(`Read ${fetched} of ${total} discovered source ${total === 1 ? "item" : "items"} and used ${included} in the draft.`, "success");
     if (result.warning) {
-      setStatus(`Read ${fetched} of ${total} discovered same-site source ${total === 1 ? "page" : "pages"}. AI fallback was used: ${result.warning}`, "success");
+      setStatus(`Read ${fetched} of ${total} discovered source ${total === 1 ? "item" : "items"}. AI fallback was used: ${result.warning}`, "success");
     }
   } catch (error) {
     outputTitle.textContent = "Draft failed";
@@ -225,122 +213,6 @@ async function draftResponse() {
     setStatus("Could not read the references. Check the links and try again.", "error");
   } finally {
     setLoading(false);
-  }
-}
-
-function setLibraryStatus(message, type = "") {
-  libraryStatus.textContent = message;
-  libraryStatus.className = `source-status ${type}`.trim();
-}
-
-function setSaving(isSaving) {
-  saveReferenceButton.disabled = isSaving;
-  saveReferenceButton.textContent = isSaving ? "Saving..." : "Save or update";
-}
-
-function renderLibrary(references) {
-  if (!references.length) {
-    libraryList.innerHTML = `<div class="empty-state">No saved references yet. Add a URL above to build your support library.</div>`;
-    return;
-  }
-
-  libraryList.innerHTML = references
-    .map((reference) => {
-      const updated = reference.updated_at ? new Date(reference.updated_at).toLocaleString() : "Not synced yet";
-      const statusClass = reference.status === "fetched" ? "good" : "bad";
-      return `<article class="library-item">
-        <div>
-          <div class="library-item-title">${escapeHtml(reference.title || reference.url)}</div>
-          <a href="${escapeAttribute(reference.url)}" target="_blank" rel="noreferrer">${escapeHtml(reference.url)}</a>
-          <div class="library-meta">
-            <span class="${statusClass}">${escapeHtml(reference.status || "unknown")}</span>
-            <span>${escapeHtml(reference.source_type || "article")}</span>
-            <span>${escapeHtml(reference.tags || "No tags")}</span>
-            <span>${updated}</span>
-          </div>
-        </div>
-        <button class="secondary-button delete-reference" type="button" data-id="${escapeAttribute(reference.id)}">Delete</button>
-      </article>`;
-    })
-    .join("");
-
-  libraryList.querySelectorAll(".delete-reference").forEach((button) => {
-    button.addEventListener("click", () => deleteSavedReference(button.dataset.id));
-  });
-}
-
-async function loadLibrary() {
-  setLibraryStatus("Loading saved references...");
-
-  try {
-    const response = await fetch("/api/references");
-    const result = await readJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(result.error || "Unable to load saved references.");
-    }
-
-    renderLibrary(result.references || []);
-    setLibraryStatus(`Loaded ${(result.references || []).length} saved reference ${(result.references || []).length === 1 ? "item" : "items"}.`, "success");
-  } catch (error) {
-    renderLibrary([]);
-    setLibraryStatus(error.message, "error");
-  }
-}
-
-async function saveReference() {
-  const url = libraryUrlInput.value.trim();
-  if (!url) {
-    setLibraryStatus("Add a reference URL first.", "error");
-    return;
-  }
-
-  setSaving(true);
-  setLibraryStatus("Saving reference and reading linked pages...");
-
-  try {
-    const response = await fetch("/api/references", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url,
-        sourceType: sourceTypeInput.value,
-        tags: referenceTagsInput.value.trim(),
-        crawlLinkedPages: crawlLinkedPagesInput.checked,
-      }),
-    });
-    const result = await readJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(result.error || "Unable to save reference.");
-    }
-
-    libraryUrlInput.value = "";
-    setLibraryStatus(result.message || "Reference saved.", "success");
-    await loadLibrary();
-  } catch (error) {
-    setLibraryStatus(error.message, "error");
-  } finally {
-    setSaving(false);
-  }
-}
-
-async function deleteSavedReference(id) {
-  setLibraryStatus("Deleting reference...");
-
-  try {
-    const response = await fetch(`/api/references?id=${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
-    const result = await readJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(result.error || "Unable to delete reference.");
-    }
-
-    setLibraryStatus(result.message || "Reference deleted.", "success");
-    await loadLibrary();
-  } catch (error) {
-    setLibraryStatus(error.message, "error");
   }
 }
 
@@ -390,18 +262,3 @@ messageInput.addEventListener("input", updateCharCount);
 draftButton.addEventListener("click", draftResponse);
 copyButton.addEventListener("click", copyDraft);
 translateDraftToggle.addEventListener("change", updateDraftDisplay);
-saveReferenceButton.addEventListener("click", saveReference);
-refreshLibraryButton.addEventListener("click", loadLibrary);
-
-tabs.forEach((tab) => {
-  tab.addEventListener("click", () => {
-    tabs.forEach((item) => item.classList.remove("active"));
-    tab.classList.add("active");
-    const showingKnowledge = tab.dataset.view === "knowledgeView";
-    knowledgeView.classList.toggle("hidden", !showingKnowledge);
-    draftView.classList.toggle("hidden", showingKnowledge);
-    if (showingKnowledge) {
-      loadLibrary();
-    }
-  });
-});
