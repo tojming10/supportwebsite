@@ -1,5 +1,3 @@
-const referenceList = document.querySelector("#referenceList");
-const addReferenceButton = document.querySelector("#addReference");
 const messageInput = document.querySelector("#customerMessage");
 const charCount = document.querySelector("#charCount");
 const draftButton = document.querySelector("#draftButton");
@@ -16,46 +14,11 @@ const prioritySelect = document.querySelector("#priority");
 const agentNameInput = document.querySelector("#agentName");
 const companyNameInput = document.querySelector("#companyName");
 
-const starterReferences = [
-  "",
-];
-
 let latestDrafts = {
   english: "",
   originalLanguage: "",
   originalLanguageName: "English",
 };
-
-function createReference(value = "") {
-  const row = document.createElement("div");
-  row.className = "reference-item";
-
-  const input = document.createElement("input");
-  input.type = "text";
-  input.placeholder = "Website, Google Drive PDF, or Drive folder link";
-  input.value = value;
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "remove-reference";
-  remove.setAttribute("aria-label", "Remove reference");
-  remove.textContent = "x";
-  remove.addEventListener("click", () => {
-    row.remove();
-    if (!referenceList.children.length) {
-      createReference();
-    }
-  });
-
-  row.append(input, remove);
-  referenceList.append(row);
-}
-
-function getReferences() {
-  return [...referenceList.querySelectorAll("input")]
-    .map((input) => input.value.trim())
-    .filter(Boolean);
-}
 
 function summarizeIssue(message) {
   const trimmed = message.replace(/\s+/g, " ").trim();
@@ -81,14 +44,6 @@ function detectNeeds(message) {
   }
 
   return needs.length ? needs : ["affected account, exact steps taken, and any screenshot or error text"];
-}
-
-function buildReferenceText(references) {
-  if (!references.length) {
-    return "I do not have confirmed reference material yet, so I will avoid guessing and ask for the right details.";
-  }
-
-  return references.map((reference, index) => `${index + 1}. ${reference}`).join("\n");
 }
 
 function setLoading(isLoading) {
@@ -144,7 +99,7 @@ async function draftResponse() {
 
   const payload = {
     message,
-    references: getReferences(),
+    references: [],
     tone: toneSelect.value,
     priority: prioritySelect.value,
     agentName: agentNameInput.value.trim() || "Support Team",
@@ -154,9 +109,9 @@ async function draftResponse() {
   };
 
   setLoading(true);
-  setStatus("Detecting language, translating to English, and reading pasted links or Google Drive PDFs...");
+  setStatus("Detecting language, translating to English, and preparing a support-ready email...");
   outputTitle.textContent = "Working on your draft";
-  draftOutput.textContent = "Detecting the customer language, translating the message to English, reading linked pages and PDFs, and preparing a support-ready email.";
+  draftOutput.textContent = "Detecting the customer language, translating the message to English, and preparing a support-ready email.";
   translateDraftToggle.checked = false;
   translateToggleWrap.classList.add("hidden");
 
@@ -210,7 +165,7 @@ async function draftResponse() {
     outputTitle.textContent = "Draft failed";
     draftOutput.classList.add("empty-warning");
     draftOutput.textContent = error.message;
-    setStatus("Could not read the references. Check the links and try again.", "error");
+    setStatus("Could not create the draft. Check the message and try again.", "error");
   } finally {
     setLoading(false);
   }
@@ -254,10 +209,8 @@ async function copyDraft() {
   }, 1500);
 }
 
-starterReferences.forEach(createReference);
 updateCharCount();
 
-addReferenceButton.addEventListener("click", () => createReference());
 messageInput.addEventListener("input", updateCharCount);
 draftButton.addEventListener("click", draftResponse);
 copyButton.addEventListener("click", copyDraft);
