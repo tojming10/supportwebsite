@@ -1,5 +1,5 @@
 const DEFAULT_REFERENCE_LINKS = [
-  "https://drive.google.com/drive/folders/1CHjUuJg_XY3p8qIa6uV2HEs1ZKnqHt8d",
+  // Add support article URLs here when you want the live site to use them.
 ];
 
 module.exports = { DEFAULT_REFERENCE_LINKS };
